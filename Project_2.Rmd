@@ -1,0 +1,388 @@
+---
+title: "Project_2"
+output: html_document
+---
+
+```{r setup, include=FALSE}
+knitr::opts_chunk$set(echo = TRUE)
+library(psych)
+library(ggplot2)
+library(dplyr)
+library(MASS)
+library(pixiedust)
+library(car)
+library(grid)
+library(gridExtra)
+library(lmtest)
+```
+
+
+## Описание исходных данных
+В работе были использованны данные о ценности жилья в городе Бостон в 1970-1980-х годах (датафрейм Boston из пакета MASS) [1,2], включающие в себя следующую информацию:
+
++ `crim` - уровень преступности на душу населения по городам
++ `zn` - доля жилой земли, зонированной для участков более 25 000 кв.
++ `indus` - доля не розничных торговых площадей на город.
++ `chas` - Фиктивная переменная реки Чарльз (= 1, если тракт ограничивает реку; 0 в противном случае)
++ `nox` - концентрация оксидов азота (частей на 10 миллионов)
++ `rm` - среднее количество комнат в доме.
++ `age` - доля занимаемых владельцем единиц, построенных до 1940 года
++ `dis` - средневзвешенное расстояние до пяти бостонских центров занятости
++ `rad` - индекс доступности к радиальным магистралям
++ `tax` - полная стоимость налога на имущество на 10 000 долларов США
++ `ptratio` - соотношение учеников к учителям по городам
++ `black` - 1000 (Bk - 0,63) ^ 2, где Bk - доля чернокожих по городам
++ `lstat` - более низкий статус населения (в процентах)
++ `medv` - средняя стоимость домов, занимаемых владельцами, в 1000 долларов
+
+
+### Предобработка данных
+Данные были проверены на корректность и наличие пропущенных значений (не были обнаружены). Переменная `chas` была приведена к факторнуму виду. Для остальных переменных была проведена стандартизация.
+
+```{r, include=FALSE}
+df <- Boston
+str(df)
+
+pMiss <- function(x){sum(is.na(x))/length(x)*100}
+apply(df,2,pMiss)
+
+df_scaled <- as.data.frame(sapply(df, scale))
+
+df_scaled$chas <- as.factor(df$chas)
+# df_scaled$rad <- as.factor(df$rad)
+```
+
+## Построение линейной модели
+
+```{r, echo = FALSE, comment=''}
+
+mod_1 <- lm(medv ~ . , df_scaled)
+mod_1_sum <- summary(mod_1)
+```
+
+Множественная линейная модель, описывающая среднюю стоимость домов (переменная `medv`) в зависимости от значений других переменных, была изначально построена с использованием всех переменных (полная линейная модель). Взаимодействия между предикторами не учитывались. Характеристики интерсепта и предикторов такой модели представлены в таблице 1. Значение коэффициента детерминации -- *`r round(mod_1_sum$r.squared, 4)`*; значение скорректированного коэффициента детерминации -- *`r round(mod_1_sum$adj.r.squared, 4)`*; число степеней свободы -- *`r mod_1$df.residual`*; F-статистика -- *`r round(mod_1_sum$fstatistic[1], 3)`*
+
+__*Таблица 1*__ Характеристики полной линейной модели (до диагностики), описывающей среднюю стоимость домов (переменная `medv`). (Значения P-value оклуглены до тысячных, значения "Coefficient", "SE", "T-statistic" округлены до сотых)
+
+```{r, echo = FALSE, comment=''}
+dust(mod_1) %>% 
+      sprinkle(cols = c("estimate", "std.error", "statistic"), round = 2) %>%
+      sprinkle(cols = "p.value", fn = quote(pvalString(value))) %>% 
+      sprinkle_colnames("Term", "Coefficient", "SE", "T-statistic", 
+                        "P-value")%>%
+  sprinkle_print_method("console")
+```
+
+### Проверка модели на мультиколлинеарность
+Проверка на мультиколлинеарность проводилась с использованием фактора инфляции дисперсии (variance inflation factor VIF)[3, 4]. Для не факторных переменных за VIF принимался GVIF, для факторных - GVIF^(1/(2*Df)), где Df - количество уровней фактора минус 1 [6]. Если VIF оказывался выше 2, то он исключался из модели. Если таких предикторов было несколько, то исключался предиктор с наибольшим VIF, затем VIF высчитывались для обновлённой модели (без этого  предиктора). Данные операции повторялись до тех пор, пока не была построена такая модель, в которой VIF для всех предикторов оказывался меньше 2.
+
+```{r, include = FALSE }
+
+# model_after_vif_check <- function(model){
+#   while (TRUE){
+#     if (length(vifs[unname(vifs) > 2]) >= 1){
+#       vifs <- vif(model)
+#       val_with_max_vif <- names(vifs)[unname(vifs)==max(vifs)]
+#       model <- update(model, .~. - val_with_max_vif)
+#       print(c('value', val_with_max_vif, 'have been excluded'))
+#       }
+#     else {
+#       print('updated model is ready')
+#       return(model)
+#       break
+#     }
+#   }
+# }
+```
+
+```{r, include = FALSE}
+# mod_2 <- model_after_vif_check(mod_1)
+```
+
+```{r, include = FALSE}
+vif(mod_1)
+mod_2 <- update(mod_1, .~. - tax)
+vif(mod_2)
+mod_2 <- update(mod_2, .~. - nox)
+vif(mod_2)
+mod_2 <- update(mod_2, .~. - dis)
+vif(mod_2)
+mod_2 <- update(mod_2, .~. - lstat)
+vif(mod_2)
+mod_2 <- update(mod_2, .~. - rad)
+vif(mod_2)
+mod_2 <- update(mod_2, .~. - indus)
+vif(mod_2)
+
+mod_2_sum <- summary(mod_2)
+```
+В итоге была получена модель, в которой не обнаруживается мультиколлинеарность. Предикторы данной модели представленными в таблице 2. Значение коэффициента детерминации новой модели -- *`r round(mod_2_sum$r.squared, 4)`*; значение скорректированного коэффициента детерминации -- *`r round(mod_2_sum$adj.r.squared, 4)`*; число степеней свободы -- *`r mod_2$df.residual`*; F-статистика -- *`r round(mod_2_sum$fstatistic[1], 3)`*
+
+__*Таблица 2*__ Характеристики полной линейной модели после исключения мультиколлинеарности, описывающей среднюю стоимость домов (переменная `medv`). (Значения P-value оклуглены до тысячных, значения "Coefficient", "SE", "T-statistic" округлены до сотых)
+
+```{r, echo = FALSE, comment=''}
+dust(mod_2) %>% 
+      sprinkle(cols = c("estimate", "std.error", "statistic"), round = 2) %>%
+      sprinkle(cols = "p.value", fn = quote(pvalString(value))) %>% 
+      sprinkle_colnames("Term", "Coefficient", "SE", "T-statistic", 
+                        "P-value")%>%
+  sprinkle_print_method("console")
+```
+
+
+### Оптимизация 
+
+```{r, echo = FALSE}
+mod_3 <- step(mod_2, direction = "backward", trace=FALSE )
+mod_3_sum <-  summary(mod_3)
+```
+
+Цель оптимизации - оставить только те предикторы, которые значимо влияют на среднюю стоимость домов, т.к. большое число предикторов может отрицательно сказываться на модели.
+Для отбора предикторов был использован алгоритм *backward selection* (*backward elimination*) [5]. Предикторы оптимизированной модели представлены в таблице 3. 
+
+Значение коэффициента детерминации новой модели -- *`r round(mod_3_sum$r.squared, 4)`*; значение скорректированного коэффициента детерминации -- *`r round(mod_3_sum$adj.r.squared, 4)`*; число степеней свободы -- *`r mod_3$df.residual`*; F-статистика -- *`r round(mod_3_sum$fstatistic[1], 3)`*
+
+__*Таблица 3*__ Характеристики оптимизированной линейной модели, описывающей среднюю стоимость домов (переменная `medv`). (Значения P-value оклуглены до тысячных, значения "Coefficient", "SE", "T-statistic" округлены до сотых)
+
+```{r, echo = FALSE, comment=''}
+dust(mod_3) %>% 
+      sprinkle(cols = c("estimate", "std.error", "statistic"), round = 2) %>%
+      sprinkle(cols = "p.value", fn = quote(pvalString(value))) %>% 
+      sprinkle_colnames("Term", "Coefficient", "SE", "T-statistic", 
+                        "P-value")%>%
+  sprinkle_print_method("console")
+```
+
+
+
+
+### Диагностика модели 
+Была проведена диагностика оптимизированной модели, в которой исключена мультиколлинеарность.
+
+#### 1. Проверка на наличие влиятельных наблюдений
+Согласно графику расстояний Кука для модели (рис. 1), влиятельных наблюдений нет.
+
+*__Рисунок 1__*. График расстояний Кука для модели без мультиколлинеарности
+
+```{r, echo=FALSE}
+mod_3_diag <- data.frame(fortify(mod_3), df_scaled[,c(2, 3, 5, 8, 9, 10, 13)])
+
+ggplot(mod_3_diag, aes(x = 1:nrow(mod_3_diag), y = .cooksd)) + 
+  geom_bar(stat = "identity") + 
+  geom_hline(yintercept = 2, color = "red") +
+  xlab('номер наблюдения')
+```
+
+
+#### 2. Независимость наблюдений
+
+```{r, echo = FALSE}
+test_1 <- dwtest(mod_3)
+```
+Наличие автокорелляции было проверено с помощью теста Дурбина-Ватсона [7]. При p-value равном `r test_1$p.value` была принята альтернативная гипотеза о наличии автокорелляции, что может значительно ухудшать нашу модель.
+
+#### 3. Нормальность распределения остатков от модели
+
+Распределение остатков от модели на нормальность было протестированно при помощи графика QQ-плота (рис.2), согласно которому остатки не распределены нормально. Эти данные ставят под сомнение применимость данной линейной модели.
+
+*__Рисунок 2__* QQ-плот для распределения остатков от модели, в которой исключена мультиколлинеарность
+```{r, echo = FALSE, comment=''}
+qqPlot(mod_3_diag$.fitted)
+```
+
+#### 4. Проверка на линейность и поиск неучтённых зависисмостей
+
+Возможно, что при удалении мультиколлинеарности из модели были отброшены предикторы, которые несли неучтённые зависимости, и поэтому настоящая модель оказалась неприминимой. Для обнаружения таких предикторов были построены графики остатков модели от предсказанных значений для предикторов, не вошедших в данную модель (рис. 4), и аналогичный график для самой модели, в которой мультиколлинеарность исключена (рис.3).
+
+*__Рисунок 3__* График остатков модели от предсказанных значений для модели без мультиколлениарности
+```{r, echo = FALSE}
+
+gg_resid <- ggplot(data = mod_3_diag, aes(x = .fitted, y = .stdresid)) + 
+  geom_point() + 
+  geom_hline(yintercept = 0) +
+  geom_smooth(method = "lm") +
+  geom_hline(yintercept = 2, color = "red") +
+  geom_hline(yintercept = -2, color = "red")
+  # geom_text(aes(label = c(1:nrow(df_scaled))))
+gg_resid
+
+```
+ 
+ 
+*__Рисунок 4__* Графики остатков модели от предсказанных значений для предикторов, не вошедших в данную модель
+
+```{r, echo = FALSE} 
+res_1 <- gg_resid + aes(x = tax)
+res_2 <- gg_resid + aes(x = nox)
+res_3 <- gg_resid + aes(x = dis)
+res_4 <- gg_resid + aes(x = lstat)
+res_5 <- gg_resid + aes(x = indus)
+res_6 <- gg_resid + aes(x = zn)
+res_7 <- gg_resid + aes(x = rad)
+
+grid.arrange(res_1, res_2, res_3, res_4, res_5, res_6, res_7, nrow = 2)
+```
+
+
+### Коррекция оптимальной модели
+Так как остатки всё же немного зависят от переменной `lstat`, она была добавлена в линейную модель, и оптимизация алгоритмом *backward selection* была проведена уже на новой модели. Предикторы полученной модели представлены в таблице 5.
+
+```{r, echo = FALSE}
+mod_4 <- update(mod_3, .~. + lstat)
+mod_5 <- step(mod_4, direction = "backward", trace=FALSE )
+mod_5_sum <-  summary(mod_5)
+
+```
+
+Значение коэффициента детерминации новой модели -- *`r round(mod_5_sum$r.squared, 4)`*; значение скорректированного коэффициента детерминации -- *`r round(mod_5_sum$adj.r.squared, 4)`*; число степеней свободы -- *`r mod_5$df.residual`*; F-статистика -- *`r round(mod_5_sum$fstatistic[1], 3)`*
+
+__*Таблица 5*__ Характеристики корректированной линейной модели. Модель описывает среднюю стоимость домов (переменная `medv`). (Значения P-value оклуглены до тысячных, значения "Coefficient", "SE", "T-statistic" округлены до сотых)
+
+```{r, echo = FALSE, comment=''}
+dust(mod_5) %>% 
+      sprinkle(cols = c("estimate", "std.error", "statistic"), round = 2) %>%
+      sprinkle(cols = "p.value", fn = quote(pvalString(value))) %>% 
+      sprinkle_colnames("Term", "Coefficient", "SE", "T-statistic", 
+                        "P-value")%>%
+  sprinkle_print_method("console")
+```
+
+
+После коррекции необходимо вновь провести диагностику модели на применимость.
+
+#### 1. Проверка на наличие влиятельных наблюдений
+Согласно графику расстояний Кука для обновлённой модели (рис. 5), влиятельных наблюдений нет.
+
+*__Рисунок 5__*. График расстояний Кука для корректированной модели
+
+```{r, echo=FALSE}
+mod_5_diag <- data.frame(fortify(mod_5), df_scaled[,c(1, 2, 3, 5, 7, 8, 9, 10)])
+
+ggplot(mod_5_diag, aes(x = 1:nrow(mod_5_diag), y = .cooksd)) + 
+  geom_bar(stat = "identity") + 
+  geom_hline(yintercept = 2, color = "red") +
+  xlab('номер наблюдения')
+```
+
+
+#### 2. Независимость наблюдений
+```{r, echo = FALSE}
+test_2 <- dwtest(mod_5)
+```
+Наличие автокорелляции было проверено с помощью теста Дурбина-Ватсона [7]. При p-value равном `r test_2$p.value` была принята альтернативная гипотеза о наличии автокорелляции, как и у модели до корреции. Это может значительно ухудшать нашу модель.
+
+#### 3. Нормальность распределения остатков от модели
+
+Распределение остатков от обновлённой модели на нормальность было визуализированно с помощью графика QQ-плот (рис.6). Согласно плоту, распределение соответствует нормальному.
+
+*__Рисунок 6__* QQ-плот для распределения остатков от корректированной модели
+```{r, echo = FALSE, comment = ''}
+a <- qqPlot(mod_5_diag$.fitted)
+```
+
+#### 4. Проверка на линейность и поиск неучтённых зависисмостей
+Для обнаружения неучтённых зависимостей были построены графики остатков корректированной модели от предсказанных значений для предикторов, не вошедших в данную модель (рис. 8), и аналогичный график для самой модели (рис.7). 
+
+*__Рисунок 7__* График остатков корректированной оптимальной модели от предсказанных значений
+```{r, echo = FALSE}
+
+gg_resid <- ggplot(data = mod_5_diag, aes(x = .fitted, y = .stdresid)) + 
+  geom_point() + 
+  geom_hline(yintercept = 0) +
+  geom_smooth(method = "lm") +
+  geom_hline(yintercept = 2, color = "red") +
+  geom_hline(yintercept = -2, color = "red")
+  # geom_text(aes(label = c(1:nrow(df_scaled))))
+gg_resid
+
+```
+ 
+ 
+*__Рисунок 8__* Графики остатков модели от предсказанных значений для предикторов, не вошедших в данную корректированную оптимальную модель
+
+```{r, echo = FALSE} 
+res_1 <- gg_resid + aes(x = tax)
+res_2 <- gg_resid + aes(x = nox)
+res_3 <- gg_resid + aes(x = dis)
+res_4 <- gg_resid + aes(x = crim)
+res_5 <- gg_resid + aes(x = indus)
+res_6 <- gg_resid + aes(x = age)
+res_7 <- gg_resid + aes(x = zn)
+
+grid.arrange(res_1, res_2, res_3, res_4, res_5, res_6, res_7, nrow = 2)
+```
+
+Согласно графикам, неучтённых зависимостей не обнаружено.
+Стоит отметить, что, согласно рисунку 7, небольшое количество наблюдений находятся за пределами 2 стандартных отклонений, а моноскедатичность также может подвергаться некоторому сомнению. Это может понижать качество данной модели.
+
+
+## Анализ модели
+```{r, echo=FALSE}
+names <- names(mod_5$coefficients)
+coefs <- unname(mod_5$coefficients)
+
+```
+Была получена следующая линейная модель:
+**medv ~ `r round(coefs[1], 3)` + (`r round(coefs[2], 3)`) * `r names[2]` + (`r round(coefs[3], 3)`) * `r names[3]` + (`r round(coefs[4], 3)`) * `r names[4]` + (`r round(coefs[5], 3)`) * `r names[5]` + (`r round(coefs[5], 3)`) * `r names[2]`**
+
+Представленная модель описывает `r round(mod_5_sum$adj.r.squared, 3)` часть дисперсии переменной `medv`, а также не достаточно хороша из-за 
+неидеальной линейности и из-за наличия зависимых наблюдений.
+
+### Интерпретация коэффициентов
+**Intercept** показывает, какой будет стоимость жилья (в единицах z-score), если все предикторы будут равны нулю (в единицах z-score). В данном случае он не несёт в себе смысловой нагрузки.
+
+**Коэффициенты перед предикторами _rm, ptratio, black, lstat_**: показывают, на сколько единиц  z-score изменится стоимость жилья в случае, если значение этого предиктора изменится на единицу z-score, а все другие показатели не изменятся.
+
+**Коэфициент перед предиктором _chas_** показывает, насколько изменяется предсказанное значение стоимости жилья при переходе от значения _chas_ "тракт не ограничивает реку" к значению "тракт ограничивает реку" (с учётом того, что переменные _rm, ptratio, black, lstat_ не изменятся).
+
+## График предсказания
+
+Графики предсказаний стоимости домов от переменной `lstat` (более низкий статус населения (в процентах)), которая обладает наибольшим по модулю коэффициентом, представлен на рисунке 9. Так как переменная `chas` является факторной, графики были построены для обеих уровней этой переменной.
+
+*__Рисунок 9__* Графики предсказаний стоимости домов от процента более низкого статуса населения. Значения переменных стандартизованы.
+```{r, echo = FALSE}
+
+MyData_chas_0 <- data.frame(
+  lstat = seq(min(df_scaled$lstat), max(df_scaled$lstat), length.out = 400),
+  chas = as.factor(0),
+  rm = mean(df_scaled$rm),
+  ptratio = mean(df_scaled$ptratio),
+  black = mean(df_scaled$black))
+
+Predictions_0 <- predict(mod_5, newdata = MyData_chas_0,  interval = 'confidence')
+MyData_chas_0 <- data.frame(MyData_chas_0, Predictions_0)
+
+Pl_predict_chas0 <- ggplot(MyData_chas_0, aes(x = lstat, y = fit)) +
+  geom_ribbon(alpha = 0.2, aes(ymin = lwr, ymax = upr)) +
+  geom_line() + 
+  ggtitle("тракт не ограничивает реку")
+
+MyData_chas_1 <- data.frame(
+  lstat = seq(min(df_scaled$lstat), max(df_scaled$lstat), length.out = 400),
+  chas = as.factor(1),
+  rm = mean(df_scaled$rm),
+  ptratio = mean(df_scaled$ptratio),
+  black = mean(df_scaled$black))
+
+Predictions_1 <- predict(mod_5, newdata = MyData_chas_1,  interval = 'confidence')
+MyData_chas_1 <- data.frame(MyData_chas_1, Predictions_1)
+
+Pl_predict_chas1 <- ggplot(MyData_chas_1, aes(x = lstat, y = fit)) +
+  geom_ribbon(alpha = 0.2, aes(ymin = lwr, ymax = upr)) +
+  geom_line() + 
+  ggtitle("тракт ограничивает реку")
+
+grid.arrange(Pl_predict_chas0 + ylim(-1.7, 1.5), Pl_predict_chas1 + ylim(-1.7, 1.5), ncol = 2)
+
+```
+
+
+
+## Источники
+1) Harrison, D. and Rubinfeld, D.L. (1978) Hedonic prices and the demand for clean air. J. Environ. Economics and Management 5, 81–102.
+2) Belsley D.A., Kuh, E. and Welsch, R.E. (1980) Regression Diagnostics. Identifying Influential Data and Sources of Collinearity. New York: Wiley.
+3) Fox, J. and Monette, G. (1992) Generalized collinearity diagnostics. JASA, 87, 178–183.
+4) Fox, J. (2016) Applied Regression Analysis and Generalized Linear Models, Third Edition. Sage.
+5) Hastie, T. J. and Pregibon, D. (1992) Generalized linear models. Chapter 6 of Statistical Models in S eds J. M. Chambers and T. J. Hastie, Wadsworth & Brooks/Cole.
+6) John Fox  & Georges Monette, Generalized Collinearity Diagnostics
+7) J. Durbin & G.S. Watson (1950), Testing for Serial Correlation in Least Squares Regression I. Biometrika 37, 409–428.
