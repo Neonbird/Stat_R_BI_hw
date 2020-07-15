@@ -1,0 +1,334 @@
+---
+title: "Mice Protein Expression"
+output: html_document
+---
+
+```{r setup, include=FALSE}
+knitr::opts_chunk$set(include=FALSE)
+```
+```{r}
+library(readxl)
+library(ggplot2)
+library(dplyr)
+library(pixiedust)
+library(DAAG)
+library(vegan)
+library(fmsb)
+library(lmtest)
+library(pca3d)
+
+data = read_xls("Data_Cortex_Nuclear.xls")
+```
+## Описание датасета
+Эксперимент был проведён на 72 мышах (согласно данным из оригинальной статьи), которые делятcя на группы по генотипу, наличию лечения, наличию оубчения и классу. Лишь для `r sum(complete.cases(data))` из `r nrow(data)` наблюдений измерен уровень продукции всех белков. Переменные, отвечащие за пренадлежность мыши к той или иной группе были приведены к факторному виду, а сами группы были проверены на сбалансированность.
+```{r}
+unique(data$Genotype)
+table(data$Genotype)
+data$Genotype <- as.factor(data$Genotype)
+```
++ переменная `Genotype` делит мышей на сбалансированные группы: контольную (значение `Control`) и группу с трисомией (наличие синдрома Дауна; значение `Ts65Dn`)
+```{r}
+unique(data$Treatment)
+table(data$Treatment)
+data$Treatment <- as.factor(data$Treatment)
+```
++ переменная `Treatment` - тип лечения: группа мышей, которую лечили инъекциями лекарства (переменная `Memantine`) и группа, которой делали инъекции физраствора (переменная `Saline`). Группы сбалансированны
+```{r}
+unique(data$Behavior)
+table(data$Behavior)
+data$Behavior <- as.factor(data$Behavior)
+```
++ переменная `Behavior` отражает наличие обучения мыши: мыши из группы *"context-shock"* (значение переменной `C/S`) обучались восприятию аверсивного стимула, а мыши из группы  *"shock-context"* (значение переменной`S/C`) не обучались. Группы сбалансированны.
+```{r}
+unique(data$class)
+table(data$class)
+data$class <- as.factor(data$class)
+```
++ переменная `class` компанует в себе всевозможные сочетания описанных выше групп:
+  + `c-CS-s`: мыши из контрольной группы, стимулированные к обучению, инъецированные физиологическим раствором
+  
+  + `c-CS-m`: мыши из контрольной группы, стимулированные к обучению, инъецированные мемантином 
+  + `c-SC-s`: мыши из контрольной группы, не стимулированные к обучению, инъецированные физиологическим раствором
+  + `c-SC-m`: мыши из контрольной группы, не стимулированные к обучению, инъецированные мемантином 
+  + `t-CS-s`: мыши с трисомией, стимулированные к обучению, инъецированные физиологическим раствором (данная группа имбалансна в плане того, что в ней намного меньше наблюдений о сравнению с другими)
+  + `t-CS-m`: мыши с трисомией, стимулированные к обучению, инъецированные мемантином
+  + `t-SC-s`: мыши с трисомией, не стимулированные к обучению, инъецированные физиологическим раствором 
+  + `t-SC-m`: мыши с трисомией, не стимулированные к обучению, инъецированные мемантином 
+
+## Различия в уровне продукции BDNF_N в зависимости от класса
+У белка BDNF_N `r sum(is.na(data$BDNF_N))/length(data$BDNF_N)*100`% пропущенных значений. Такие наблюдения были выброшены из анализа, т.к. составляют очень малую долю наблюдений. Визуализируем исходные данные.
+
+*__рис.1__* Различия в уровне продукции BDNF_N в зависимости от класса
+```{r, echo = FALSE, include=TRUE}
+data_for_BDNF_N <- subset(data, !is.na(BDNF_N), select = c(BDNF_N, class))
+ggplot(data_for_BDNF_N, aes(class, BDNF_N))+
+  ggtitle(label = "Различия в уровне продукции BDNF_N в зависимости от класса")+
+  geom_boxplot()+
+  labs(x = "Класс", y = "Уровень продукции BDNF_N")
+```
+
+Была построена простая линейная модель с одним предиктором, характеристики которой представлены в таблице 1.
+
+```{r,  comment=''}
+bdnf_lm <- lm(BDNF_N ~ class, data_for_BDNF_N)
+
+```
+
+*__Таблица 1__* Характеристики простой линейной модели, описывающей зависимость уровня продукции белка BDNF_N от класса. (Значения P-value оклуглены до тысячных, значения "Coefficient", "SE", "T-statistic" округлены до сотых)
+```{r,  echo = FALSE, include = TRUE, comment=''}
+dust(bdnf_lm) %>% 
+      sprinkle(cols = c("estimate", "std.error", "statistic"), round = 2) %>%
+      sprinkle(cols = "p.value", fn = quote(pvalString(value))) %>% 
+      sprinkle_colnames("Term", "Coefficient", "SE", "T-statistic", 
+                        "P-value")%>%
+  sprinkle_print_method("console")
+```
+
+Линейная модель говорит о том, что при p-value < 2.2e-16 существует значимое отличие средних значений в классах от среднего значения класса c-CS-m, но это ничего не говорит о наличии общей зависимости уровня продукции белка BDNF_N от класса. 
+
+```{r}
+bdnf_anova <- anova(bdnf_lm)
+F_val <- bdnf_anova$`F value`[1]
+p_val <- bdnf_anova$`Pr(>F)`[1]
+```
+
+Для ответа на вопрос о её наличии был проведён ANOVA. Согласно полученным данным, уровень продукции белка BDNF_N значимо зависит от класса (F = `r round(F_val, 2)` , p_value = `r p_val`, df_1 = `r bdnf_anova$Df[1]`, df_2 = `r bdnf_anova$Df[2]`). Стоит иметь в виду, что в классах не одинаковое кол-во наблюдений, что не очень хорошо для дисперсионного анализа, однако, данная модель хорошо применима, т.к.:
+
++ Согласно графику расстояний Кука для модели (рис. 2), влиятельных наблюдений нет.
+
++ Распределение остатков от модели на нормальность было протестированно при помощи бокс-плотов (рис.3), согласно которым остатки распределены нормально.
+
+*__рис.2__* График расстояний Кука для линейной модели зависимости уровня продукции белка BDNF_N от класса
+```{r}
+mod_diag <- fortify(bdnf_lm)
+
+kook <- ggplot(mod_diag, aes(x = 1:nrow(mod_diag), y = .cooksd)) + 
+  geom_bar(stat = "identity") + ggtitle("График расстояний Кука")
+  xlab('номер наблюдения')
+```
+```{r, echo = FALSE, include=TRUE}
+kook
+```
+
+*__рис.3__* График остатков от предсказанных значений для линейной модели зависимости уровня продукции белка BDNF_N от класса
+```{r, echo = FALSE, include=TRUE}
+ggplot(mod_diag, aes(x = class, y = .stdresid)) + geom_boxplot() + ggtitle("График остатков от предсказанных значений")
+```
+
+## PCA
+### Предобработка данных
+```{r}
+pMiss <- function(x){sum(is.na(x))/length(x)*100}
+# по белкам
+a <- apply(data,2,pMiss)
+new_data<- data[unname(a) < 15]
+# по наблюдениям
+b <- apply(new_data,1,pMiss)
+new_data <- new_data %>% filter(unname(b) < 15)
+# замена на среднее по классу
+new_data <- new_data %>% group_by(class) %>% mutate_at(vars(-group_cols()), list(~ ifelse(is.na(.), mean(., na.rm = TRUE),.)))
+## данные без факторных переменных, но с классом
+df_nums_class <- new_data[, !names(new_data) %in% c("MouseID", "Genotype", "Treatment", "Behavior")]
+```
+Были обнаружены белки (5 шт.), для которых было более 15% пропущенных значений. Такие белки были удалены из анализа, т.к. замена их пропущенных значений на средние значения может привести к большим искажениям в данных. Также были удалены наблюдения (3 шт.), содержащие информаци менее чем о 15% белков, т.к. предсказания, полученные с помощью таких наблюдений могут так же критично исказить данные. Остальные пропущенные значения были заменены на среднее значение для белка по переменной `Class`. Именно эта обработанная таблица с заполненными пропущенными значениями будет использована в дальнейшем анализе.
+
+
+### Биплот корреляций (график нагрузок)
+*__рис.4__* График факторной нагрузки
+
+```{r, echo = FALSE, include=TRUE}
+pca <- rda(df_nums_class[,1:(length(df_nums_class)-1)], scale = TRUE)
+biplot(pca, scaling = "species", display = "species")
+```
+
+### Биплот расстояний (график ординации)
+__*рис.5*__ График ординаций
+```{r, echo = FALSE, include=TRUE}
+df_scores <- data.frame(df_nums_class, scores(pca, display = "sites", 
+                                              choices = c(1, 2, 3), scaling = "sites"))
+
+p_scores <- ggplot(df_scores, aes(x = PC1, y = PC2)) + 
+  geom_point(aes( color = class), alpha = 0.5) +
+  coord_equal(xlim = c(-1.2, 1.2), ylim = c(-1.2, 1.2)) + ggtitle(label = "Ординация в осях главных компонент") + theme_bw()
+p_scores
+```
+
+Для того, чтобы понять, какой вклад вносит каждая компонента был построен следующий график (рис.6). Он показывает долю общей изменчивости датасэта, которая может быть объяснена каждым из компонентов и помогает индентифицировать самые важные компоненты. 
+
+*__рис.6__* График собственных чисел
+```{r, echo = FALSE, include=TRUE}
+screeplot(pca, type = "lines", bstick = TRUE)
+```
+
+
+### Трёхмерный график для первых трёх компонент
+Откроется, если воспроизвести следующий код:
+```{r, echo = TRUE, include=TRUE}
+pca_3D <- prcomp(df_nums_class[,1:(length(df_nums_class)-1)], scale.=TRUE)
+pca3d(pca_3D, group=df_nums_class$class)
+
+```
+
+
+## Линейная модель для предсказания уровня белка ERBB4_N на основании данных о других белках
+
+### Построение полной линейной модели
+```{r}
+data_lm <- new_data[, !names(new_data) %in% c("class", "MouseID", "Genotype", "Treatment", "Behavior")]
+mod_1 <- lm(ERBB4_N ~ . , data_lm )
+mod_1_sum <- summary(mod_1)
+
+```
+Множественная линейная модель, описывающая уровень продуции белка ERBB4_N в зависимости от уровня продукции белков, была изначально построена с использованием данных о всех белках, представленных в датасэте(полная линейная модель). Взаимодействия между предикторами не учитывались. Значение коэффициента детерминации -- *`r round(mod_1_sum$r.squared, 4)`*; значение скорректированного коэффициента детерминации -- *`r round(mod_1_sum$adj.r.squared, 4)`*; число степеней свободы -- *`r mod_1$df.residual`*; F-статистика -- *`r round(mod_1_sum$fstatistic[1], 3)`*
+
+### Проверка модели на мультиколлинеарность
+Проверка на мультиколлинеарность проводилась с использованием фактора инфляции дисперсии (variance inflation factor VIF). Если VIF оказывался выше 2, то он исключался из модели. Если таких предикторов было несколько, то исключался предиктор с наибольшим VIF, затем VIF высчитывались для обновлённой модели (без этого  предиктора). Данные операции повторялись до тех пор, пока не была построена такая модель, в которой VIF для всех предикторов оказывался меньше 2. Реализовано с помощью пользовательской функции (https://gist.github.com/fawda123/4717702#file-vif_fun-r).
+
+```{r}
+vif_func<-function(in_frame,thresh=2,trace=F,...){
+  if(any(!'data.frame' %in% class(in_frame))) in_frame<-data.frame(in_frame)
+  
+  #get initial vif value for all comparisons of variables
+  vif_init<-NULL
+  var_names <- names(in_frame)
+  for(val in var_names){
+      regressors <- var_names[-which(var_names == val)]
+      form <- paste(regressors, collapse = '+')
+      form_in <- formula(paste(val, '~', form))
+      vif_init<-rbind(vif_init, c(val, VIF(lm(form_in, data = in_frame, ...))))
+      }
+  vif_max<-max(as.numeric(vif_init[,2]), na.rm = TRUE)
+
+  if(vif_max < thresh){
+    if(trace==T){ #print output of each iteration
+        prmatrix(vif_init,collab=c('var','vif'),rowlab=rep('',nrow(vif_init)),quote=F)
+        cat('\n')
+        cat(paste('All variables have VIF < ', thresh,', max VIF ',round(vif_max,2), sep=''),'\n\n')
+        }
+    return(var_names)
+    }
+  else{
+
+    in_dat<-in_frame
+
+    #backwards selection of explanatory variables, stops when all VIF values are below 'thresh'
+    while(vif_max >= thresh){
+      
+      vif_vals<-NULL
+      var_names <- names(in_dat)
+        
+      for(val in var_names){
+        regressors <- var_names[-which(var_names == val)]
+        form <- paste(regressors, collapse = '+')
+        form_in <- formula(paste(val, '~', form))
+        vif_add<-VIF(lm(form_in, data = in_dat, ...))
+        vif_vals<-rbind(vif_vals,c(val,vif_add))
+        }
+      max_row<-which(vif_vals[,2] == max(as.numeric(vif_vals[,2]), na.rm = TRUE))[1]
+
+      vif_max<-as.numeric(vif_vals[max_row,2])
+
+      if(vif_max<thresh) break
+      
+      if(trace==T){ #print output of each iteration
+        prmatrix(vif_vals,collab=c('var','vif'),rowlab=rep('',nrow(vif_vals)),quote=F)
+        cat('\n')
+        cat('removed: ',vif_vals[max_row,1],vif_max,'\n\n')
+        flush.console()
+        }
+
+      in_dat<-in_dat[,!names(in_dat) %in% vif_vals[max_row,1]]
+
+      }
+
+    return(names(in_dat))
+    
+    }
+  
+  }
+```
+
+```{r}
+expl_data <- data_lm[, !names(data_lm) %in% c("ERBB4_N")]
+smth <- vif_func(expl_data)
+paste( unlist(smth), collapse=' + ')
+mod_2 <- lm(ERBB4_N ~ pCAMKII_N + pELK_N + pRSK_N + APP_N + SOD1_N + DSCR1_N + CDK5_N + ADARB1_N + AcetylH3K9_N + RRP1_N + BAX_N + GFAP_N + GluR4_N + pCASP9_N + PSD95_N + SHH_N, data = data_lm)
+
+mod_2_sum <- summary(mod_2)
+```
+
+В итоге была получена модель, в которой не обнаруживается мультиколлинеарность. Предикторы данной модели представленными в таблице 2. Значение коэффициента детерминации новой модели -- *`r round(mod_2_sum$r.squared, 4)`*; значение скорректированного коэффициента детерминации -- *`r round(mod_2_sum$adj.r.squared, 4)`*; число степеней свободы -- *`r mod_2$df.residual`*; F-статистика -- *`r round(mod_2_sum$fstatistic[1], 3)`*
+
+__*Таблица 2*__ Характеристики линейной модели после исключения мультиколлинеарности. (Значения P-value оклуглены до тысячных, значения "Coefficient", "SE", "T-statistic" округлены до сотых)
+```{r, echo = FALSE, include=TRUE, comment = ''}
+dust(mod_2) %>% 
+      sprinkle(cols = c("estimate", "std.error", "statistic"), round = 2) %>%
+      sprinkle(cols = "p.value", fn = quote(pvalString(value))) %>% 
+      sprinkle_colnames("Term", "Coefficient", "SE", "T-statistic", 
+                        "P-value")%>%
+  sprinkle_print_method("console")
+```
+
+
+### Оптимизация
+Цель оптимизации - оставить только те предикторы, которые значимо влияют на среднюю стоимость домов, т.к. большое число предикторов может отрицательно сказываться на модели.
+Для отбора предикторов был использован алгоритм *backward selection* (*backward elimination*). Предикторы оптимизированной модели представлены в таблице 3
+
+```{r, echo = FALSE}
+mod_3 <- step(mod_2, direction = "backward", trace=FALSE )
+mod_3_sum <-  summary(mod_3)
+```
+
+Значение коэффициента детерминации новой модели -- *`r round(mod_3_sum$r.squared, 4)`*; значение скорректированного коэффициента детерминации -- *`r round(mod_3_sum$adj.r.squared, 4)`*; число степеней свободы -- *`r mod_3$df.residual`*; F-статистика -- *`r round(mod_3_sum$fstatistic[1], 3)`*
+
+__*Таблица 3*__ Характеристики оптимизированной линейной модели. (Значения P-value оклуглены до тысячных, значения "Coefficient", "SE", "T-statistic" округлены до сотых)
+
+```{r, echo = FALSE, include=TRUE, comment = ''}
+dust(mod_3) %>% 
+      sprinkle(cols = c("estimate", "std.error", "statistic"), round = 2) %>%
+      sprinkle(cols = "p.value", fn = quote(pvalString(value))) %>% 
+      sprinkle_colnames("Term", "Coefficient", "SE", "T-statistic", 
+                        "P-value")%>%
+  sprinkle_print_method("console")
+```
+
+### Диагностика модели 
+Была проведена диагностика оптимизированной модели, в которой исключена мультиколлинеарность.
+
+#### 1. Проверка на наличие влиятельных наблюдений
+Согласно графику расстояний Кука для модели (рис. 7), влиятельных наблюдений нет.
+
+*__Рисунок 7__*. График расстояний Кука для модели без мультиколлинеарности
+
+```{r, echo=FALSE}
+mod_diag_3 <- fortify(mod_3)
+
+kook <- ggplot(mod_diag_3, aes(x = 1:nrow(mod_diag_3), y = .cooksd)) + 
+  geom_bar(stat = "identity") + ggtitle("График расстояний Кука")
+  xlab('номер наблюдения')
+```
+```{r, echo = FALSE, include=TRUE}
+kook
+```
+
+#### 2. Независимость наблюдений
+
+```{r, echo = FALSE}
+test_1 <- dwtest(mod_3)
+```
+Наличие автокорелляции было проверено с помощью теста Дурбина-Ватсона [7]. При p-value равном `r test_1$p.value` была принята альтернативная гипотеза о наличии автокорелляции.
+
+#### 3. Нормальность распределения остатков от модели
+```{r}
+t <- t.test(mod_diag_3$.fitted)
+```
+
+Распределение остатков от модели на нормальность было протестированно при помощи t-теста. Остатки не распределены нормально (p-value = `r t$p.value`), что делает модель не идеальной.
+
+### Анализ модели
+Представленная модель описывает `r round(mod_3_sum$adj.r.squared, 3)` часть дисперсии переменной ERBB4_N. Эта модель не идеальна, т.к. её остатки не распределены нормально, присутствует автокорелляция, а также она описывает не очень большую часть дисперсии переменной, хотя в неё включено довольно таки много предикторов. Ценность данной модели так же сомнительна в связи с тем, что не позволяет сделать достаточно хороших биологических выводов, то есть её довольно трудно применить, особенно если брать во внимание её неидеальность.
+
+### Интерпретация коэффициентов
+**Intercept** показывает, какой будет продукция белка ERBB4_N, если продукция остальных белков будет равна 0.
+
+**Коэффициенты перед остальными предикторами** показывают, на сколько единиц   изменится продукция белка ERBB4_N, если значение продукции этого белка изменится на единицу, а показатели продукции для других белков не изменятся.
